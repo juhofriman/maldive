@@ -8,7 +8,25 @@
             [maldive.generic-in-memory-store :as store]))
 
 (def dslidea
-  {:generic-entity
+  {:story
+   {:type :story
+    :name "Story"
+    :target "/story"
+    :method "POST"
+    :header "Story is a story"
+    :description "Just another datatype"
+    :fields [{:name "title"
+              :label "Title of the story"
+              :type :text}
+             {:name "type"
+              :label "Type of story"
+              :populateFn (fn [] [[nil "Select type"] [1 "Short story"] [2 "Novel"]])
+              :type :dropdown}
+             {:name "story-content"
+              :label "Story"
+              :type :textarea
+              :rows 20}]}
+   :generic-entity
    {:type :generic-entity
     :name "Generic entity"
     :target "/generic-entity"
@@ -49,12 +67,14 @@
   [:.forms [:li html/first-of-type]] (html/clone-for [[type {:keys [name]}] (into [] dslidea)]
                                                      [:li :a] (html/do-> (html/content name)
                                                                          ; DAFUG?
-                                                                         (html/set-attr :href (str "?type="  (subs (str type) 1)))))
+                                                                         (html/set-attr :href (str "?type=" (str type)))))
   [:p.lead] (html/content (if type (str "Documents of type: " (:name (get dslidea (keyword type)))) "Select type"))
   [:a.add-new] (html/set-attr :href (-> dslidea (get (keyword type)) (get :target)))
+  [:table] (html/set-attr :style (if listing "display: table" "display: none"))
+  [:a.add-new] (html/set-attr :style (if listing "display: table" "display: none"))
   [:table [:tr html/last-of-type]] (html/clone-for [doc listing]
                                                    [:td [:a]] (html/do-> (html/content (get doc name-selector))
-                                                                         (html/set-attr :href (str (-> dslidea (get (keyword type)) (get :target)) "/" (get doc "id"))))))
+                                                                         (html/set-attr :href (str (-> dslidea (get (keyword (subs type 1))) (get :target)) "/" (get doc "id"))))))
 
 (html/deftemplate form-template "form.html" [id {:keys [header description target method]} snippets]
   [:h1] (html/content header)
@@ -66,7 +86,16 @@
                               (html/append snippets)))
 
 (def snippets
-  {:text (html/defsnippet text-input "form-segments.html"
+  {:dropdown (html/defsnippet dropdown "form-segments.html"
+               [:.dropdown]
+               [{:keys [name label populateFn]} value]
+               [:label] (html/content label)
+               [:select] (html/do-> (html/set-attr :name name))
+               [:select [:option html/first-of-type]] (html/clone-for [[value label] (populateFn)]
+                                                                      [:option] (html/do-> (html/set-attr :value (str value))
+                                                                                           (html/content label)))
+               [[:option (html/attr= :value value)]] (html/set-attr :selected "true"))
+   :text (html/defsnippet text-input "form-segments.html"
            [:.text]
            [{:keys [name label placeholder]} value]
            [:label] (html/content label)
@@ -84,6 +113,7 @@
 
 (defn create-fields
   [{:keys [fields]} obj]
+  (println obj)
   (for [{:keys [type name] :as field} fields :let [val (get obj name)]] ((get snippets type) field (or val ""))))
 
 (defn create-form
@@ -94,24 +124,18 @@
 (defroutes app-routes
   (route/resources "/static")
   (GET "/" {qp :query-params} (if-let [t (get qp "type")]
-                                (listing t "title" (store/docs-by-type (keyword t)))
+                                (listing t "title" (store/docs-by-type (keyword (subs t 1))))
                                 (listing nil nil nil)))
-  (GET "/generic-entity" [] (create-form :generic-entity nil))
-  (GET "/generic-entity/:id" [id] (create-form :generic-entity (store/get-entity :generic-entity (read-string id))))
-  (POST "/generic-entity" {params :form-params}
-        (let [p (dissoc params "__anti-forgery-token")]
-            (do (println "Received POST to /message.")
-                (println p)
-                (store/store :generic-entity p)
-                (ring.util.response/redirect "/?type=generic-entity"))))
-  (GET "/memo" [] (create-form :memo nil))
-  (GET "/memo/:id" [id] (create-form :memo (store/get-entity :memo (read-string id))))
-  (POST "/memo" {params :form-params}
-        (let [p (dissoc params "__anti-forgery-token")]
-            (do (println "Received POST to /memo.")
-                (println p)
-                (store/store :memo p)
-                (ring.util.response/redirect "/?type=memo"))))  
+  
+  
+  (apply routes (flatten (for [[type {:keys [target]}] (into [] dslidea)] [(GET target [] (create-form type nil))
+                                                                           (GET (str target "/:id") [id] (do (println "Id: " id " " type) (create-form type (store/get-entity type (read-string id)))))
+                                                                           (POST target {params :form-params}
+                                                                                 (let [p (dissoc params "__anti-forgery-token")]
+                                                                                   (do (println "Received POST to" target)
+                                                                                       (store/store type p)
+                                                                                       (ring.util.response/redirect (str "/?type=" type)))))])))
+
   (route/not-found "Not Found"))
 
 (defn wrap-type-mappings
